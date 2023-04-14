@@ -141,7 +141,10 @@ def get_observation_probs(sentences: List[List[Tuple[str, str]]]):
                 tag_count[proper_tag] += 1
     for tag in observation_probs:
         for word in observation_probs[tag]:
-            observation_probs[tag][word] /= tag_count[tag]
+            try:
+                observation_probs[tag][word] /= tag_count[tag]
+            except ZeroDivisionError:
+                observation_probs[tag][word] = 0
     # convert to list of dicts
     observation_probs = [observation_probs[tag] for tag in tags]
     return observation_probs, tag_count
@@ -170,7 +173,10 @@ def get_transition_probs(sentences, tag_count):
                 transition_probs[sentence[i + 1][1]][proper_tag] += 1
     for tag1 in transition_probs:
         for tag2 in transition_probs[tag1]:
-            transition_probs[tag1][tag2] /= tag_count[tag2]
+            try:
+                transition_probs[tag1][tag2] /= tag_count[tag2]
+            except ZeroDivisionError:
+                transition_probs[tag1][tag2] = 0
     # convert to list of lists. T[j][i] = P(St = tag j | St-1 = tag i), inverted compared to the pseudocode
     transition_probs = [[transition_probs[tag1][tag2] for tag2 in tags] for tag1 in tags]
     return transition_probs
@@ -204,29 +210,81 @@ def read_test_file(test_file: str) -> Tuple[List[List[str]], Dict[str, None]]:
 
 def viterbi(sentence, init, trans, obs, tags=tags):
     """Run the Viterbi algorithm on the given sentence."""
-    prob = {word: {tag: 0 for tag in tags} for word in sentence}
-    prev = {word: {tag: 0 for tag in tags} for word in sentence}
-    # Base case
-    for tag in tags:
-        if sentence[0] not in obs[tag]:
-            obs[tag][sentence[0]] = 0
-        prob[sentence[0]][tag] = init[tag] * obs[tag][sentence[0]]
-        prev[sentence[0]][tag] = None
+    prob = [[0 for _ in range(len(tags))] for _ in range(len(sentence))]
+    prev = [[None for _ in range(len(tags))] for _ in range(len(sentence))]
+    for i in range(len(tags)):
+        try:
+            prob[0][i] = init[i] * obs[i][sentence[0]]
+        except KeyError:
+            prob[0][i] = 0  # TODO: come up with better unseen word handling strategy
+        prev[0][i] = None  # unnecessary
     # Recursive case
-    for i in range(1, len(sentence)):
-        for tag in tags:
-            value = float('-inf')
+    for t in range(1, len(sentence)):
+        for i in range(len(tags)):
+            val = float('-inf')
             max_tag = None
-            for tag_j in tags:
-                print(obs[tag])
-                print(sentence[i])
-                curr_value = prob[sentence[i-1]][tag_j] * trans[tag][tag_j] * obs[tag][sentence[i]]
-                if curr_value > value:
-                    value = curr_value
-                    max_tag = tag_j
-            prob[sentence[i]][tag] = prob[sentence[i-1]][max_tag] * trans[tag][max_tag] * obs[tag][sentence[i]]
-            prev[sentence[i]][tag] = max_tag
+            for j in range(len(tags)):
+                try:
+                    curr_val = prob[t-1][j] * trans[i][j] * obs[i][sentence[t]]
+                except KeyError:
+                    curr_val = 0  # TODO: come up with better unseen word handling strategy
+                if curr_val > val:
+                    val = curr_val
+                    max_tag = j
+            prob[t][i] = val
+            prev[t][i] = max_tag
     return prob, prev
+
+
+def backtracking(sentence, prob, prev):
+    tagged_words = []
+    val = float('-inf')
+    max_tag = None
+    for i in range(len(tags)):
+        if prob[-1][i] > val:
+            val = prob[-1][i]
+            max_tag = i
+    tagged_words.append((sentence[-1], tags[max_tag]))
+    for t in range(len(sentence) - 2, -1, -1):
+        max_tag = prev[t + 1][max_tag]
+        tagged_words.insert(0, (sentence[t], tags[max_tag]))
+    return tagged_words
+
+
+def output(output_file, training_list):
+    """Output the tagged sentences to the output file."""
+    initial_probs, observation_probs, transition_probs = train(training_list)
+    sentences, output_dict = read_test_file(args.testfile)
+    with open(output_file, 'w') as f:
+        for sentence in sentences:
+            prob, prev = viterbi(sentence, initial_probs, transition_probs, observation_probs)
+            tagged_words = backtracking(sentence, prob, prev)
+            for word, tag in tagged_words:
+                f.write(f'{word} : {tag}\n')
+
+
+def get_stats(output_file, test_file):
+    """Get the accuracy of the output file."""
+    with open(output_file, 'r') as f:
+        with open(test_file, 'r') as g:
+            correct = 0
+            total = 0
+            for line1, line2 in zip(f, g):
+                if line1.strip() == line2.strip():
+                    correct += 1
+                total += 1
+    return correct / total
+
+
+def find_inaccuracies(output_file, test_file):
+    """Find the words that were incorrectly tagged."""
+    with open(output_file, 'r') as f:
+        with open(test_file, 'r') as g:
+            for line1, line2 in zip(f, g):
+                if line1.strip() != line2.strip():
+                    print(line1.strip(), line2.strip())
+
+
 
 
 if __name__ == '__main__':
@@ -264,7 +322,6 @@ if __name__ == '__main__':
     # sentences = read_training_files(training_list)
     # o = get_observation_probs(sentences)
     # print(o)
-    initial_probs, observation_probs, transition_probs = train(training_list)
-    print(transition_probs)
-    sentences, output_dict = read_test_file(args.testfile)
-    # print(viterbi(sentences[0], initial_probs, transition_probs, observation_probs))
+    output(args.outputfile, training_list)
+    # print("Accuracy: {}".format(get_stats(args.outputfile, 'training1.txt')))
+    # find_inaccuracies(args.outputfile, 'training1.txt')
